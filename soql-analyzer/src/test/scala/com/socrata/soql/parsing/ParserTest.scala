@@ -27,8 +27,7 @@ class ParserTest extends WordSpec with MustMatchers {
   def numberLiteral(num: BigDecimal) = NumberLiteral(num)(NoPosition)
   def booleanLiteral(bool: Boolean) = BooleanLiteral(bool)(NoPosition)
   def nullLiteral = NullLiteral()(NoPosition)
-  def param(name: String) = Hole.SavedQuery(HoleName(name), None)(NoPosition)
-  def param(name: String, qualifier: String) = Hole.SavedQuery(HoleName(name), Some(qualifier))(NoPosition)
+  def param(name: String, qualifier: String) = Hole.SavedQuery(HoleName(name), qualifier)(NoPosition)
 
   "Parsing" should {
     "require a full `between' clause" in {
@@ -179,8 +178,7 @@ class ParserTest extends WordSpec with MustMatchers {
       x.selection.expressions.head.expression.toString must be (largeNumber)
     }
 
-    "accept the various parameter syntaxes" in {
-      parseParamExpression("""param("a")""") must equal (param("a"))
+    "accept the parameter syntax" in {
       parseParamExpression("""param(@aaaa-aaaa, "a")""") must equal (param("a", "aaaa-aaaa"))
     }
 

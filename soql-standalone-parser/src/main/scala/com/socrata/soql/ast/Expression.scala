@@ -398,8 +398,8 @@ object Hole {
     def doc = Doc("?" + name)
   }
 
-  case class SavedQuery(name: HoleName, view: Option[String])(val position: Position) extends Hole {
-    def doc = (view.toSeq.map { table => d"@$table" } :+ StringLiteral(name.name)(NoPosition).doc).
+  case class SavedQuery(name: HoleName, view: String)(val position: Position) extends Hole {
+    def doc = Seq(d"@${view}", StringLiteral(name.name)(NoPosition).doc).
       encloseNesting(d"param(", Doc.Symbols.comma, d")")
   }
 }

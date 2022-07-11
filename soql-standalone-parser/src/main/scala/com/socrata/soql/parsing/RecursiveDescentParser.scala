@@ -1197,7 +1197,7 @@ abstract class RecursiveDescentParser(parameters: AbstractParser.Parameters = Ab
               case tokens.StringLiteral(varName) =>
                 reader.rest.rest.rest.first match {
                   case RPAREN() =>
-                    ParseResult(reader.rest.rest.rest.rest, Hole.SavedQuery(HoleName(varName), Some(ti.drop(1)))(pos))
+                    ParseResult(reader.rest.rest.rest.rest, Hole.SavedQuery(HoleName(varName), ti.drop(1))(pos))
                   case _ =>
                     fail(reader.rest.rest.rest, RPAREN())
                 }
@@ -1207,15 +1207,8 @@ abstract class RecursiveDescentParser(parameters: AbstractParser.Parameters = Ab
           case _ =>
             fail(reader.rest, COMMA())
         }
-      case tokens.StringLiteral(varName) =>
-        reader.rest.first match {
-          case RPAREN() =>
-            ParseResult(reader.rest.rest, Hole.SavedQuery(HoleName(varName), None)(pos))
-          case _ =>
-            fail(reader.rest, RPAREN())
-        }
       case _ =>
-        fail(reader, ATableIdentifier, AStringLiteral)
+        fail(reader, ATableIdentifier)
     }
   }
 
