@@ -36,7 +36,7 @@ sealed trait SoQLTypeInfoCommon extends TypeInfoCommon[SoQLType, SoQLValue] {
   implicit def hasType = SoQLTypeInfoCommon.hasType
 }
 
-final class SoQLTypeInfo2[MT <: analyzer2.MetaTypes with ({ type ColumnType = SoQLType; type ColumnValue = SoQLValue })] extends TypeInfo2[MT] with SoQLTypeInfoCommon with analyzer2.StatementUniverse[MT] {
+final class SoQLTypeInfo2[MT <: analyzer2.MetaTypes with ({ type ColumnType = SoQLType; type ColumnValue = SoQLValue })](val numericRowIdLiterals: Boolean) extends TypeInfo2[MT] with SoQLTypeInfoCommon with analyzer2.StatementUniverse[MT] {
   override def potentialExprs(l: ast.Literal, sourceName: Option[analyzer2.types.ScopedResourceName[MT]], primaryTable: Option[Provenance]) =
     l match {
       case ast.NullLiteral() => typeParameterUniverse.iterator.map(analyzer2.NullLiteral[MT](_)(new analyzer2.AtomicPositionInfo(Source.nonSynthetic(sourceName, l.position)))).toVector
@@ -47,6 +47,19 @@ final class SoQLTypeInfo2[MT <: analyzer2.MetaTypes with ({ type ColumnType = So
           baseNumber,
           analyzer2.FunctionCall[MT](SoQLTypeInfo.numberToMoneyFunc, Seq(baseNumber))(new analyzer2.FuncallPositionInfo(Source.Synthetic, NoPosition)),
           analyzer2.FunctionCall[MT](SoQLTypeInfo.numberToDoubleFunc, Seq(baseNumber))(new analyzer2.FuncallPositionInfo(Source.Synthetic, NoPosition))
+        ) ++ (
+          if(numericRowIdLiterals) {
+            try {
+              val id = SoQLID(n.bigDecimal.longValueExact)
+              id.provenance = primaryTable
+              Seq(analyzer2.LiteralValue[MT](id)(new analyzer2.AtomicPositionInfo(Source.nonSynthetic(sourceName, l.position))))
+            } catch {
+              case _ : ArithmeticException =>
+                Nil
+            }
+          } else {
+            Nil
+          }
         )
       case ast.StringLiteral(s) =>
         val baseString = analyzer2.LiteralValue[MT](SoQLText(s))(new analyzer2.AtomicPositionInfo(Source.nonSynthetic(sourceName, l.position)))
@@ -54,7 +67,7 @@ final class SoQLTypeInfo2[MT <: analyzer2.MetaTypes with ({ type ColumnType = So
         results += baseString
         for {
           conversion <- SoQLTypeInfo.stringConversions
-          v <- conversion.test(s)
+          v <- conversion.test(s, numericRowIdLiterals)
           expr <- conversion.exprs[MT]
         } {
           results += expr(v, sourceName, l.position, primaryTable).asInstanceOf[analyzer2.Expr[MT]] // SAFETY: CT and CV are the same, and that's all this cares about
@@ -86,8 +99,8 @@ final class SoQLTypeInfo2[MT <: analyzer2.MetaTypes with ({ type ColumnType = So
 }
 
 object SoQLTypeInfo extends TypeInfo[SoQLType, SoQLValue] with SoQLTypeInfoCommon {
-  def soqlTypeInfo2[MT <: analyzer2.MetaTypes with ({ type ColumnType = SoQLType; type ColumnValue = SoQLValue })]: TypeInfo2[MT] =
-    new SoQLTypeInfo2
+  def soqlTypeInfo2[MT <: analyzer2.MetaTypes with ({ type ColumnType = SoQLType; type ColumnValue = SoQLValue })](numericRowIdLiterals: Boolean): TypeInfo2[MT] =
+    new SoQLTypeInfo2(numericRowIdLiterals)
 
   override def booleanLiteralExpr(b: Boolean, pos: Position) = Seq(typed.BooleanLiteral(b, SoQLBoolean.t)(pos))
 
@@ -209,7 +222,7 @@ object SoQLTypeInfo extends TypeInfo[SoQLType, SoQLValue] with SoQLTypeInfoCommo
     // value that can be used to construct the relevant target type.
     // It's used to guard both analyzers
     type TestResult
-    def test(s: String): Option[TestResult]
+    def test(s: String, numericRowIdLiterals: Boolean): Option[TestResult]
 
     // This produces one of the functions that will perform the
     // (runtime) conversion for old-analyzer (i.e., old-analyzer will
@@ -230,6 +243,9 @@ object SoQLTypeInfo extends TypeInfo[SoQLType, SoQLValue] with SoQLTypeInfoCommo
     sealed abstract class Unprovenanced[T] extends Conversions {
       type TestResult = T
 
+      def tst(s: String): Option[TestResult]
+      final def test(s: String, numericRowIdLiterals: Boolean) = tst(s)
+
       def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})]: Seq[(T, Option[analyzer2.types.ScopedResourceName[MT]], Position) => analyzer2.Expr[MT]]
       final def exprs[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] =
         es[MT].map { ef => (t: T, sourceName: Option[analyzer2.types.ScopedResourceName[MT]], pos: Position, prov: Option[Provenance]) => ef(t, sourceName, pos) }
@@ -241,7 +257,7 @@ object SoQLTypeInfo extends TypeInfo[SoQLType, SoQLValue] with SoQLTypeInfoCommo
       type TestResult = String
 
       def tst(s: String): Boolean
-      final def test(s: String) = if(tst(s)) Some(s) else None
+      final def test(s: String, numericRowIdLiterals: Boolean) = if(tst(s)) Some(s) else None
 
       def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})]: Seq[(SoQLText, Option[analyzer2.types.ScopedResourceName[MT]], Position) => analyzer2.Expr[MT]]
       final def exprs[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] =
@@ -256,37 +272,44 @@ object SoQLTypeInfo extends TypeInfo[SoQLType, SoQLValue] with SoQLTypeInfoCommo
 
   private[functions] val stringConversions = Seq[Conversions](
     new Conversions.Unprovenanced[DateTime] {
-      override def test(s: String) = SoQLFixedTimestamp.StringRep.unapply(s)
+      override def tst(s: String) = SoQLFixedTimestamp.StringRep.unapply(s)
       override val functions = Seq(textToFixedTimestampFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToFixedTimestampExpr _)
     },
     new Conversions.Unprovenanced[LocalDateTime] {
-      override def test(s: String) = SoQLFloatingTimestamp.StringRep.unapply(s)
+      override def tst(s: String) = SoQLFloatingTimestamp.StringRep.unapply(s)
       override val functions = Seq(textToFloatingTimestampFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToFloatingTimestampExpr _)
     },
     new Conversions.Unprovenanced[LocalDate] {
-      override def test(s: String) = SoQLDate.StringRep.unapply(s)
+      override def tst(s: String) = SoQLDate.StringRep.unapply(s)
       override val functions = Seq(textToDateFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToDateExpr _)
     },
     new Conversions.Unprovenanced[LocalTime] {
-      override def test(s: String) = SoQLTime.StringRep.unapply(s)
+      override def tst(s: String) = SoQLTime.StringRep.unapply(s)
       override val functions = Seq(textToTimeFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToTimeExpr _)
     },
     new Conversions.Unprovenanced[Period] {
-      override def test(s: String) = SoQLInterval.StringRep.unapply(s)
+      override def tst(s: String) = SoQLInterval.StringRep.unapply(s)
       override val functions = Seq(textToIntervalFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToIntervalExpr _)
     },
     new Conversions.Provenanced[SoQLID] {
-      override def test(s: String) = SoQLID.FormattedButUnobfuscatedStringRep.unapply(s)
+      // This is a little unfortunate; in the analyzer1 codepath,
+      // we'll never see a numeric row id literal here, because there
+      // QC munges the dataset schema to turn row IDs into numbers
+      // before analysis.  On the analyzer2 path, row IDs remain row
+      // IDs.
+      override def test(s: String, numericRowIdLiterals: Boolean) =
+        if(numericRowIdLiterals) SoQLID.ClearNumberRep.unapply(s)
+        else SoQLID.FormattedButUnobfuscatedStringRep.unapply(s)
       override val functions = Seq(textToRowIdFunc)
       override def exprs[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToRowIdExpr _)
     },
     new Conversions.Provenanced[SoQLVersion] {
-      override def test(s: String) = SoQLVersion.FormattedButUnobfuscatedStringRep.unapply(s)
+      override def test(s: String, numericRowIdLiterals: Boolean) = SoQLVersion.FormattedButUnobfuscatedStringRep.unapply(s)
       override val functions = Seq(textToRowVersionFunc)
       override def exprs[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToRowVersionExpr _)
     },
@@ -299,42 +322,42 @@ object SoQLTypeInfo extends TypeInfo[SoQLType, SoQLValue] with SoQLTypeInfoCommo
       }
     },
     new Conversions.Unprovenanced[Point] {
-      override def test(s: String) = SoQLPoint.WktRep.unapply(s)
+      override def tst(s: String) = SoQLPoint.WktRep.unapply(s)
       override val functions = Seq(textToPointFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToPointExpr _)
     },
     new Conversions.Unprovenanced[MultiPoint] {
-      override def test(s: String) = SoQLMultiPoint.WktRep.unapply(s)
+      override def tst(s: String) = SoQLMultiPoint.WktRep.unapply(s)
       override val functions = Seq(textToMultiPointFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToMultiPointExpr _)
     },
     new Conversions.Unprovenanced[LineString] {
-      override def test(s: String) = SoQLLine.WktRep.unapply(s)
+      override def tst(s: String) = SoQLLine.WktRep.unapply(s)
       override val functions = Seq(textToLineFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToLineExpr _)
     },
     new Conversions.Unprovenanced[MultiLineString] {
-      override def test(s: String) = SoQLMultiLine.WktRep.unapply(s)
+      override def tst(s: String) = SoQLMultiLine.WktRep.unapply(s)
       override val functions = Seq(textToMultiLineFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToMultiLineExpr _)
     },
     new Conversions.Unprovenanced[Polygon] {
-      override def test(s: String) = SoQLPolygon.WktRep.unapply(s)
+      override def tst(s: String) = SoQLPolygon.WktRep.unapply(s)
       override val functions = Seq(textToPolygonFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToPolygonExpr _)
     },
     new Conversions.Unprovenanced[MultiPolygon] {
-      override def test(s: String) = SoQLMultiPolygon.WktRep.unapply(s)
+      override def tst(s: String) = SoQLMultiPolygon.WktRep.unapply(s)
       override val functions = Seq(textToMultiPolygonFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToMultiPolygonExpr _)
     },
     new Conversions.Unprovenanced[SoQLPhone] {
-      override def test(s: String) = SoQLPhone.parsePhone(s)
+      override def tst(s: String) = SoQLPhone.parsePhone(s)
       override val functions = Seq(textToPhoneFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToPhoneExpr _)
     },
     new Conversions.Unprovenanced[SoQLUrl] {
-      override def test(s: String) = SoQLUrl.parseUrl(s)
+      override def tst(s: String) = SoQLUrl.parseUrl(s)
       override val functions = Seq(textToUrlFunc)
       override def es[MT <: analyzer2.MetaTypes with ({type ColumnType = SoQLType; type ColumnValue = SoQLValue})] = Seq(new ExprHelper[MT].textToUrlExpr _)
     },
@@ -356,7 +379,7 @@ object SoQLTypeInfo extends TypeInfo[SoQLType, SoQLValue] with SoQLTypeInfoCommo
     results += baseString
     results ++= (for {
       conversion <- stringConversions
-      if conversion.test(s).isDefined
+      if conversion.test(s, false).isDefined
       func <- conversion.functions
     } yield typed.FunctionCall(func, Seq(baseString), None, None)(pos, pos))
     results += typed.FunctionCall(textToBlobFunc, Seq(baseString), None, None)(pos, pos)

@@ -22,7 +22,7 @@ class SoQLAdHocRewriterTest extends FunSuite with MustMatchers with SoQLRollupTe
     val q = s"select $expr from @rollup"
     val Right(ft) = tf.findTables(0, q, Map.empty)
     val analyzer = new SoQLAnalyzer[MT](
-      SoQLTypeInfo.soqlTypeInfo2,
+      SoQLTypeInfo.soqlTypeInfo2(numericRowIdLiterals = false),
       SoQLFunctionInfo,
       new ToProvenance {
         override def toProvenance(dtn: DatabaseTableName) = Provenance(dtn.name)

@@ -57,7 +57,7 @@ object Soql2Toy extends (Array[String] => Unit) with StatementUniverse[Soql2Toy]
       def docOf(cv: CV) = cv.doc(CryptProvider.zeros)
     }
 
-    val analyzer = new SoQLAnalyzer[Soql2Toy](SoQLTypeInfo.soqlTypeInfo2, SoQLFunctionInfo, provenanceMapper).
+    val analyzer = new SoQLAnalyzer[Soql2Toy](SoQLTypeInfo.soqlTypeInfo2(numericRowIdLiterals = false), SoQLFunctionInfo, provenanceMapper).
       preserveSystemColumns { (columnName, expr) =>
         if(columnName == ColumnName(":id")) {
           Some(AggregateFunctionCall[Soql2Toy](MonomorphicFunction(SoQLFunctions.Max, Map("a" -> SoQLID)), Seq(expr), false, None)(FuncallPositionInfo.Synthetic))

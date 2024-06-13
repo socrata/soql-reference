@@ -290,8 +290,8 @@ case object SoQLID extends SoQLType("row_identifier") {
    * This exists for OBE compatibility reason.
    * @param unused
    */
-  class ClearNumberRep(unused: CryptProvider) extends StringRep(unused) {
-    override def unapply(text: String): Option[SoQLID] = {
+  object ClearNumberRep {
+    def unapply(text: String): Option[SoQLID] = {
       try {
         Some(new SoQLID(text.toLong))
       } catch {
@@ -300,9 +300,14 @@ case object SoQLID extends SoQLType("row_identifier") {
       }
     }
 
-    override def unapply(text: CaseInsensitiveString): Option[SoQLID] = unapply(text.getString)
+    def unapply(text: CaseInsensitiveString): Option[SoQLID] = unapply(text.getString)
 
-    override def apply(soqlId: SoQLID) = soqlId.value.toString
+    def apply(soqlId: SoQLID) = soqlId.value.toString
+  }
+  class ClearNumberRep(unused: CryptProvider) extends StringRep(unused) {
+    override def unapply(text: String): Option[SoQLID] = ClearNumberRep.unapply(text)
+    override def unapply(text: CaseInsensitiveString): Option[SoQLID] = ClearNumberRep.unapply(text)
+    override def apply(soqlId: SoQLID) = ClearNumberRep(soqlId)
   }
 
   def isPossibleId(s: String): Boolean = Obfuscator.isPossibleObfuscatedValue(s, prefix = prefix)
